@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sertifikatlar Portali</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Ranglar: to'q ko'k + och ko'k + oq
+    tailwind.config = {
+      theme: { extend: { colors: {
+        brand: { DEFAULT: '#23246b', dark: '#191a52' },
+        sky: { 50: '#eef3ff', 100: '#dbe6ff', 200: '#c3d4fb', 300: '#a3bbf5' }
+      } } }
+    };
+  </script>
+  <script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js"></script>
+  <style>
+    .btn-brand { background: #23246b; color: #fff; }
+    .btn-brand:hover { background: #191a52; }
+    .btn-soft { background: #dbe6ff; color: #23246b; }
+    .btn-soft:hover { background: #c3d4fb; }
+    button:focus-visible, input:focus-visible, a:focus-visible, label:focus-within { outline: 2px solid #23246b; outline-offset: 2px; }
+    .drop-active { border-color: #23246b; background: #dbe6ff; }
+    dialog::backdrop { background: rgba(25, 26, 82, .45); }
+    dialog { border: 0; border-radius: 1rem; padding: 0; width: min(92vw, 28rem); }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body class="min-h-screen bg-sky-50 text-slate-800">
+
+  <div id="toast" class="fixed right-4 top-4 z-50 hidden max-w-sm rounded-lg px-4 py-3 text-sm text-white shadow-lg" role="status"></div>
+
+  <!-- ============ KIRISH / RO'YXATDAN O'TISH ============ -->
+  <section id="auth-view" class="hidden min-h-screen items-center justify-center px-4 py-10">
+    <div class="w-full max-w-md overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-sm">
+      <div class="flex flex-col items-center bg-sky-100 px-8 pb-5 pt-7 text-center">
+        <img src="assets/logo.png" onerror="this.onerror=null; this.src='asstes/logo.png';" alt="Logotip" class="mb-3 h-24 w-24 object-contain" />
+        <h1 class="text-2xl font-bold text-brand">Sertifikatlar Portali</h1>
+        <p class="mt-1 text-sm text-brand/70">O‘quvchilar sertifikatlarini yuklash tizimi</p>
+      </div>
+      <div class="p-8">
+        <div class="mb-6 grid grid-cols-2 rounded-lg bg-sky-50 p-1 text-sm font-medium">
+          <button id="tab-login" type="button">Kirish</button>
+          <button id="tab-register" type="button">Ro‘yxatdan o‘tish</button>
+        </div>
+
+        <form id="login-form" class="space-y-4" novalidate>
+          <div>
+            <label for="login-email" class="mb-1 block text-sm font-medium">Email</label>
+            <input id="login-email" type="email" autocomplete="username" required placeholder="email@misol.uz" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+          </div>
+          <div>
+            <label for="login-password" class="mb-1 block text-sm font-medium">Parol</label>
+            <input id="login-password" type="password" autocomplete="current-password" required placeholder="Parolingiz" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+          </div>
+          <p id="login-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+          <button type="submit" class="btn-brand flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition">
+            <i data-lucide="log-in" class="h-4 w-4"></i> Kirish
+          </button>
+        </form>
+
+        <form id="register-form" class="hidden space-y-4" novalidate>
+          <div>
+            <label for="reg-name" class="mb-1 block text-sm font-medium">O‘quvchi F.I.Sh</label>
+            <input id="reg-name" type="text" required placeholder="Masalan: Aliyev Vali Karimovich" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+            <p class="mt-1 text-xs text-slate-500">Shu nom sizning papkangiz nomi bo‘ladi. Iltimos, to‘liq va to‘g‘ri yozing.</p>
+          </div>
+          <div>
+            <label for="reg-grade" class="mb-1 block text-sm font-medium">Sinfi</label>
+            <input id="reg-grade" type="text" required placeholder="Masalan: 10-A" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+          </div>
+          <div>
+            <label for="reg-email" class="mb-1 block text-sm font-medium">Email</label>
+            <input id="reg-email" type="email" autocomplete="username" required placeholder="email@misol.uz" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+          </div>
+          <div>
+            <label for="reg-password" class="mb-1 block text-sm font-medium">Parol</label>
+            <input id="reg-password" type="password" autocomplete="new-password" minlength="6" required placeholder="Kamida 6 ta belgi" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+          </div>
+          <p id="register-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+          <button type="submit" class="btn-brand flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition">
+            <i data-lucide="user-plus" class="h-4 w-4"></i> Ro‘yxatdan o‘tish
+          </button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ILOVA ============ -->
+  <div id="app-view" class="hidden">
+    <header class="bg-brand text-white">
+      <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+        <div class="flex items-center gap-3">
+          <span class="flex h-11 w-11 items-center justify-center rounded-full bg-white">
+            <img src="assets/logo.png" onerror="this.onerror=null; this.src='asstes/logo.png';" alt="Logotip" class="h-9 w-9 object-contain" />
+          </span>
+          <span class="text-lg font-bold">Sertifikatlar Portali</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="mr-2 hidden text-right sm:block">
+            <p id="nav-name" class="text-sm font-semibold leading-tight"></p>
+            <p id="nav-role" class="text-xs text-sky-200"></p>
+          </div>
+          <button id="pw-btn" type="button" class="flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/20">
+            <i data-lucide="key-round" class="h-4 w-4"></i><span class="hidden sm:inline">Parol</span>
+          </button>
+          <button id="logout-btn" type="button" class="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-medium text-brand hover:bg-sky-100">
+            <i data-lucide="log-out" class="h-4 w-4"></i> Chiqish
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- O'QUVCHI -->
+    <main id="student-view" class="mx-auto hidden max-w-6xl gap-6 px-4 py-8 lg:grid lg:grid-cols-5">
+      <section class="rounded-2xl border border-sky-200 bg-white p-6 lg:col-span-2 lg:self-start">
+        <h2 class="mb-1 text-lg font-bold text-brand">Sertifikat yuklash</h2>
+        <p class="mb-5 text-sm text-slate-500">PDF, JPG yoki PNG fayl, hajmi 15 MB gacha.</p>
+        <form id="upload-form" class="space-y-4" novalidate>
+          <div>
+            <label for="cert-title" class="mb-1 block text-sm font-medium">Sertifikat nomi</label>
+            <input id="cert-title" type="text" required placeholder="IELTS, CEFR, Matematika Milliy Sertifikat" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="cert-score" class="mb-1 block text-sm font-medium">Ball / Daraja <span class="font-normal text-slate-400">(ixtiyoriy)</span></label>
+              <input id="cert-score" type="text" placeholder="C1 / 7.5" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+            </div>
+            <div>
+              <label for="cert-date" class="mb-1 block text-sm font-medium">Berilgan sana</label>
+              <input id="cert-date" type="date" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+            </div>
+          </div>
+          <div>
+            <span class="mb-1 block text-sm font-medium">Fayl</span>
+            <label id="drop-zone" for="cert-file" class="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-sky-300 bg-sky-50 px-4 py-7 text-center transition hover:border-brand">
+              <i data-lucide="upload-cloud" class="mb-2 h-8 w-8 text-brand"></i>
+              <span id="file-label" class="break-all text-sm text-slate-600">Faylni shu yerga tashlang yoki tanlash uchun bosing</span>
+            </label>
+            <input id="cert-file" type="file" accept=".pdf,.jpg,.jpeg,.png" class="sr-only" />
+          </div>
+          <p id="upload-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+          <button id="upload-btn" type="submit" class="btn-brand flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition disabled:opacity-60">
+            <i data-lucide="upload" class="h-4 w-4"></i> Sertifikatni yuklash
+          </button>
+        </form>
+      </section>
+
+      <section class="mt-6 rounded-2xl border border-sky-200 bg-white p-6 lg:col-span-3 lg:mt-0">
+        <h2 class="mb-4 text-lg font-bold text-brand">Mening sertifikatlarim</h2>
+        <div id="my-list" class="space-y-3"></div>
+      </section>
+    </main>
+
+    <!-- ADMIN -->
+    <main id="admin-view" class="mx-auto hidden max-w-6xl px-4 py-8">
+      <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-3">
+          <img src="assets/logo.png" onerror="this.onerror=null; this.src='asstes/logo.png';" alt="Logotip" class="h-14 w-14 object-contain" />
+          <div>
+            <h2 class="text-xl font-bold text-brand">Admin paneli</h2>
+            <p class="text-sm text-slate-500">O‘quvchilar sertifikatlarini boshqarish</p>
+          </div>
+        </div>
+        <button id="zip-btn" type="button" class="btn-brand flex items-center justify-center gap-2 rounded-lg px-5 py-3 text-sm font-semibold transition">
+          <i data-lucide="folder-archive" class="h-5 w-5"></i> Barchasini papkalab (.ZIP) yuklash
+        </button>
+      </div>
+
+      <p id="missing-warn" class="mb-4 hidden rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"></p>
+
+      <div class="mb-6 grid gap-4 sm:grid-cols-3">
+        <div class="flex items-center gap-4 rounded-xl border border-sky-200 bg-white p-5">
+          <span class="flex h-12 w-12 items-center justify-center rounded-full bg-sky-100"><i data-lucide="users" class="h-6 w-6 text-brand"></i></span>
+          <div><p id="stat-students" class="text-2xl font-bold text-brand">0</p><p class="text-sm text-slate-500">Ro‘yxatdan o‘tgan o‘quvchilar</p></div>
+        </div>
+        <div class="flex items-center gap-4 rounded-xl border border-sky-200 bg-white p-5">
+          <span class="flex h-12 w-12 items-center justify-center rounded-full bg-sky-100"><i data-lucide="award" class="h-6 w-6 text-brand"></i></span>
+          <div><p id="stat-certs" class="text-2xl font-bold text-brand">0</p><p class="text-sm text-slate-500">Yuklangan sertifikatlar</p></div>
+        </div>
+        <div class="flex items-center gap-4 rounded-xl border border-sky-200 bg-white p-5">
+          <span class="flex h-12 w-12 items-center justify-center rounded-full bg-sky-100"><i data-lucide="folders" class="h-6 w-6 text-brand"></i></span>
+          <div><p id="stat-folders" class="text-2xl font-bold text-brand">0</p><p class="text-sm text-slate-500">ZIP uchun tayyor papkalar</p></div>
+        </div>
+      </div>
+
+      <div class="relative mb-6">
+        <i data-lucide="search" class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"></i>
+        <input id="admin-search" type="search" placeholder="O‘quvchi ismi, sinfi yoki sertifikat nomi bo‘yicha qidirish" class="w-full rounded-lg border border-sky-200 bg-white py-2.5 pl-9 pr-3 text-sm" />
+      </div>
+
+      <h3 class="mb-3 text-base font-bold text-brand">O‘quvchilar papkalari</h3>
+      <div id="folders-grid" class="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
+
+      <h3 class="mb-3 text-base font-bold text-brand">O‘quvchilar ro‘yxati</h3>
+      <div class="mb-8 overflow-x-auto rounded-xl border border-sky-200 bg-white">
+        <table class="w-full min-w-[640px] text-left text-sm">
+          <thead class="bg-sky-100 text-brand">
+            <tr>
+              <th class="px-4 py-3 font-semibold">F.I.Sh</th><th class="px-4 py-3 font-semibold">Sinfi</th>
+              <th class="px-4 py-3 font-semibold">Email</th><th class="px-4 py-3 font-semibold">Sertifikatlar</th>
+              <th class="px-4 py-3 text-right font-semibold">Amallar</th>
+            </tr>
+          </thead>
+          <tbody id="students-table" class="divide-y divide-sky-100"></tbody>
+        </table>
+      </div>
+
+      <h3 class="mb-3 text-base font-bold text-brand">Barcha sertifikatlar</h3>
+      <div class="overflow-x-auto rounded-xl border border-sky-200 bg-white">
+        <table class="w-full min-w-[760px] text-left text-sm">
+          <thead class="bg-sky-100 text-brand">
+            <tr>
+              <th class="px-4 py-3 font-semibold">O‘quvchi (papka nomi)</th><th class="px-4 py-3 font-semibold">Sinfi</th>
+              <th class="px-4 py-3 font-semibold">Sertifikat nomi</th><th class="px-4 py-3 font-semibold">Ball / Daraja</th>
+              <th class="px-4 py-3 font-semibold">Sana</th><th class="px-4 py-3 text-right font-semibold">Amallar</th>
+            </tr>
+          </thead>
+          <tbody id="certs-table" class="divide-y divide-sky-100"></tbody>
+        </table>
+      </div>
+      <div id="pager" class="mt-4 flex items-center justify-between text-sm text-slate-600"></div>
+    </main>
+  </div>
+
+  <!-- Parolni o'zgartirish -->
+  <dialog id="pw-dialog">
+    <form id="pw-form" class="space-y-4 p-6" novalidate>
+      <h2 class="text-lg font-bold text-brand">Parolni o‘zgartirish</h2>
+      <div>
+        <label for="pw-current" class="mb-1 block text-sm font-medium">Joriy parol</label>
+        <input id="pw-current" type="password" autocomplete="current-password" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+      </div>
+      <div>
+        <label for="pw-new" class="mb-1 block text-sm font-medium">Yangi parol</label>
+        <input id="pw-new" type="password" autocomplete="new-password" placeholder="Kamida 6 ta belgi" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+      </div>
+      <p id="pw-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+      <div class="flex justify-end gap-2">
+        <button type="button" data-close class="btn-soft rounded-lg px-4 py-2 text-sm font-medium">Bekor qilish</button>
+        <button type="submit" class="btn-brand rounded-lg px-4 py-2 text-sm font-semibold">Saqlash</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Sertifikatni tahrirlash -->
+  <dialog id="edit-dialog">
+    <form id="edit-form" class="space-y-4 p-6" novalidate>
+      <h2 class="text-lg font-bold text-brand">Sertifikatni tahrirlash</h2>
+      <input id="edit-id" type="hidden" />
+      <div>
+        <label for="edit-title" class="mb-1 block text-sm font-medium">Sertifikat nomi</label>
+        <input id="edit-title" type="text" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="edit-score" class="mb-1 block text-sm font-medium">Ball / Daraja</label>
+          <input id="edit-score" type="text" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+        </div>
+        <div>
+          <label for="edit-date" class="mb-1 block text-sm font-medium">Berilgan sana</label>
+          <input id="edit-date" type="date" class="w-full rounded-lg border border-sky-200 px-3 py-2.5 text-sm" />
+        </div>
+      </div>
+      <p id="edit-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+      <div class="flex justify-end gap-2">
+        <button type="button" data-close class="btn-soft rounded-lg px-4 py-2 text-sm font-medium">Bekor qilish</button>
+        <button type="submit" class="btn-brand rounded-lg px-4 py-2 text-sm font-semibold">Saqlash</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const PAGE_SIZE = 20;
+    let me = null;
+    let adminData = { total_students: 0, students: [], certificates: [] };
+    let page = 1;
+    let mineCache = [];
+
+    /* ---------- Yordamchilar ---------- */
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmtDate = (d) => (d ? String(d).split('-').reverse().join('.') : '—');
+    const today = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+    const icons = () => window.lucide && lucide.createIcons();
+    const badge = (s) => (s ? `<span class="inline-block rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-semibold text-brand">${esc(s)}</span>` : '<span class="text-slate-400">—</span>');
+    const missingBadge = (c) => (c.missing ? '<span class="ml-2 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Fayl topilmadi</span>' : '');
+    const btnSoft = 'btn-soft flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium';
+    const btnDanger = 'flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50';
+
+    function toast(msg, ok = true) {
+      const t = $('toast');
+      t.textContent = msg;
+      t.className = `fixed right-4 top-4 z-50 max-w-sm rounded-lg px-4 py-3 text-sm text-white shadow-lg ${ok ? 'bg-brand' : 'bg-red-600'}`;
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => t.classList.add('hidden'), 3500);
+    }
+    function showError(id, msg) { const el = $(id); el.textContent = msg; el.classList.toggle('hidden', !msg); }
+    async function api(url, options = {}) {
+      const res = await fetch(url, { credentials: 'same-origin', ...options });
+      let data = {};
+      try { data = await res.json(); } catch (e) {}
+      if (res.status === 401 && me) { me = null; render(); throw new Error('Seans tugadi. Qayta kiring.'); }
+      if (!res.ok) throw new Error(data.error || 'Xatolik yuz berdi.');
+      return data;
+    }
+    const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+    /* ---------- Ko'rinishlar ---------- */
+    function render() {
+      const on = !!me;
+      $('auth-view').classList.toggle('hidden', on);
+      $('auth-view').classList.toggle('flex', !on);
+      $('app-view').classList.toggle('hidden', !on);
+      if (!on) return icons();
+      $('nav-name').textContent = me.full_name;
+      $('nav-role').textContent = me.role === 'admin' ? 'Administrator' : `${me.grade} sinf o‘quvchisi`;
+      const admin = me.role === 'admin';
+      $('admin-view').classList.toggle('hidden', !admin);
+      $('student-view').classList.toggle('hidden', admin);
+      if (admin) loadAdmin(); else { $('cert-date').value = today(); loadMine(); }
+      icons();
+    }
+
+    /* ---------- Kirish / ro'yxatdan o'tish ---------- */
+    function setTab(login) {
+      $('login-form').classList.toggle('hidden', !login);
+      $('register-form').classList.toggle('hidden', login);
+      const on = 'rounded-md px-3 py-2 bg-white text-brand shadow-sm', off = 'rounded-md px-3 py-2 text-slate-500';
+      $('tab-login').className = login ? on : off;
+      $('tab-register').className = login ? off : on;
+    }
+    $('tab-login').onclick = () => setTab(true);
+    $('tab-register').onclick = () => setTab(false);
+    setTab(true);
+
+    $('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault(); showError('login-error', '');
+      try {
+        me = (await api('/api/login', json('POST', { email: $('login-email').value, password: $('login-password').value }))).user;
+        $('login-form').reset(); render();
+      } catch (err) { showError('login-error', err.message); }
+    });
+    $('register-form').addEventListener('submit', async (e) => {
+      e.preventDefault(); showError('register-error', '');
+      try {
+        me = (await api('/api/register', json('POST', {
+          full_name: $('reg-name').value, grade: $('reg-grade').value, email: $('reg-email').value, password: $('reg-password').value
+        }))).user;
+        $('register-form').reset(); toast('Muvaffaqiyatli ro‘yxatdan o‘tdingiz!'); render();
+      } catch (err) { showError('register-error', err.message); }
+    });
+    $('logout-btn').onclick = async () => {
+      try { await api('/api/logout', { method: 'POST' }); } catch (e) {}
+      me = null; setTab(true); render();
+    };
+
+    /* ---------- Dialoglar ---------- */
+    document.querySelectorAll('dialog [data-close]').forEach((b) => (b.onclick = () => b.closest('dialog').close()));
+    $('pw-btn').onclick = () => { $('pw-form').reset(); showError('pw-error', ''); $('pw-dialog').showModal(); };
+    $('pw-form').addEventListener('submit', async (e) => {
+      e.preventDefault(); showError('pw-error', '');
+      try {
+        await api('/api/change-password', json('POST', { current_password: $('pw-current').value, new_password: $('pw-new').value }));
+        $('pw-dialog').close(); toast('Parol o‘zgartirildi.');
+      } catch (err) { showError('pw-error', err.message); }
+    });
+
+    function openEdit(c) {
+      $('edit-id').value = c.id; $('edit-title').value = c.title;
+      $('edit-score').value = c.score || ''; $('edit-date').value = c.issued_date || today();
+      showError('edit-error', ''); $('edit-dialog').showModal();
+    }
+    $('edit-form').addEventListener('submit', async (e) => {
+      e.preventDefault(); showError('edit-error', '');
+      try {
+        await api(`/api/certificates/${$('edit-id').value}`, json('PUT', {
+          title: $('edit-title').value, score: $('edit-score').value, issued_date: $('edit-date').value
+        }));
+        $('edit-dialog').close(); toast('Sertifikat yangilandi.');
+        me.role === 'admin' ? loadAdmin() : loadMine();
+      } catch (err) { showError('edit-error', err.message); }
+    });
+
+    /* ---------- O'quvchi ---------- */
+    const fileInput = $('cert-file'), dropZone = $('drop-zone');
+    const showFileName = () => { $('file-label').textContent = fileInput.files[0] ? fileInput.files[0].name : 'Faylni shu yerga tashlang yoki tanlash uchun bosing'; };
+    fileInput.addEventListener('change', showFileName);
+    ['dragenter', 'dragover'].forEach((ev) => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drop-active'); }));
+    ['dragleave', 'drop'].forEach((ev) => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove('drop-active'); }));
+    dropZone.addEventListener('drop', (e) => { if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; showFileName(); } });
+
+    $('upload-form').addEventListener('submit', async (e) => {
+      e.preventDefault(); showError('upload-error', '');
+      const title = $('cert-title').value.trim(), file = fileInput.files[0];
+      if (!title) return showError('upload-error', 'Sertifikat nomini kiriting.');
+      if (!file) return showError('upload-error', 'Sertifikat faylini tanlang.');
+      if (file.size > 15 * 1024 * 1024) return showError('upload-error', 'Fayl hajmi 15 MB dan oshmasligi kerak.');
+      const fd = new FormData();
+      fd.append('title', title); fd.append('score', $('cert-score').value.trim());
+      fd.append('issued_date', $('cert-date').value || today()); fd.append('file', file);
+      const btn = $('upload-btn'); btn.disabled = true;
+      try {
+        await api('/api/certificates', { method: 'POST', body: fd });
+        $('upload-form').reset(); $('cert-date').value = today(); showFileName();
+        toast('Sertifikat yuklandi.'); loadMine();
+      } catch (err) { showError('upload-error', err.message); }
+      btn.disabled = false;
+    });
+
+    async function loadMine() {
+      try {
+        mineCache = (await api('/api/my-certificates')).certificates;
+        $('my-list').innerHTML = mineCache.length
+          ? mineCache.map((c) => `
+            <article class="flex flex-col gap-3 rounded-xl border border-sky-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2"><h3 class="font-semibold">${esc(c.title)}</h3>${c.score ? badge(c.score) : ''}</div>
+                <p class="mt-1 text-xs text-slate-500">${fmtDate(c.issued_date)} · <span class="break-all">${esc(c.original_name)}</span></p>
+              </div>
+              <div class="flex shrink-0 flex-wrap gap-2">
+                <a href="/uploads/${encodeURIComponent(c.stored_name)}" target="_blank" rel="noopener" class="${btnSoft}"><i data-lucide="external-link" class="h-3.5 w-3.5"></i> Ochish</a>
+                <button type="button" data-edit="${c.id}" class="${btnSoft}"><i data-lucide="pencil" class="h-3.5 w-3.5"></i> Tahrirlash</button>
+                <button type="button" data-del="${c.id}" class="${btnDanger}"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i> O‘chirish</button>
+              </div>
+            </article>`).join('')
+          : `<div class="rounded-xl border border-dashed border-sky-300 bg-sky-50 px-4 py-10 text-center text-sm text-slate-500">Hali sertifikat yuklanmagan. Chap tomondagi shakl orqali birinchi sertifikatingizni yuklang.</div>`;
+        icons();
+      } catch (err) { toast(err.message, false); }
+    }
+    $('my-list').addEventListener('click', (e) => {
+      const d = e.target.closest('[data-del]'), ed = e.target.closest('[data-edit]');
+      if (d) deleteCert(d.dataset.del, loadMine);
+      if (ed) openEdit(mineCache.find((c) => String(c.id) === ed.dataset.edit));
+    });
+
+    async function deleteCert(id, after) {
+      if (!confirm('Bu sertifikatni o‘chirishni xohlaysizmi? Bu amalni bekor qilib bo‘lmaydi.')) return;
+      try { await api(`/api/certificates/${id}`, { method: 'DELETE' }); toast('Sertifikat o‘chirildi.'); after(); }
+      catch (err) { toast(err.message, false); }
+    }
+
+    /* ---------- Admin ---------- */
+    async function loadAdmin() {
+      try { adminData = await api('/api/admin/overview'); renderAdmin(); }
+      catch (err) { toast(err.message, false); }
+    }
+
+    function renderAdmin() {
+      const all = adminData.certificates;
+      const folderOf = (c) => `${c.full_name} (${c.grade})`;
+      $('stat-students').textContent = adminData.total_students;
+      $('stat-certs').textContent = all.length;
+      $('stat-folders').textContent = new Set(all.map((c) => c.user_id)).size;
+
+      const miss = all.filter((c) => c.missing).length;
+      $('missing-warn').textContent = `Diqqat: ${miss} ta sertifikat fayli serverda topilmadi. ZIP ichida ular TOPILMAGAN_FAYLLAR.txt ro‘yxatida ko‘rsatiladi.`;
+      $('missing-warn').classList.toggle('hidden', !miss);
+
+      const q = $('admin-search').value.trim().toLowerCase();
+      const rows = q ? all.filter((c) => [c.full_name, c.grade, c.title, c.score].join(' ').toLowerCase().includes(q)) : all;
+      const students = q ? adminData.students.filter((s) => [s.full_name, s.grade, s.email].join(' ').toLowerCase().includes(q)) : adminData.students;
+
+      // Papkalar
+      const groups = new Map();
+      rows.forEach((c) => {
+        if (!groups.has(c.user_id)) groups.set(c.user_id, { name: folderOf(c), count: 0, full: c.full_name });
+        groups.get(c.user_id).count++;
+      });
+      $('folders-grid').innerHTML = groups.size
+        ? [...groups.values()].map((g) => `
+          <button type="button" data-folder="${esc(g.full)}" class="flex items-center gap-3 rounded-xl border border-sky-200 bg-sky-100 p-4 text-left transition hover:border-brand hover:bg-sky-200">
+            <i data-lucide="folder" class="h-9 w-9 shrink-0 text-brand"></i>
+            <span class="min-w-0"><span class="block truncate font-semibold text-brand">${esc(g.name)}</span><span class="text-xs text-brand/70">${g.count} ta sertifikat</span></span>
+          </button>`).join('')
+        : `<p class="col-span-full rounded-xl border border-dashed border-sky-300 bg-white px-4 py-8 text-center text-sm text-slate-500">${q ? 'Qidiruv bo‘yicha hech narsa topilmadi.' : 'Hali hech kim sertifikat yuklamagan.'}</p>`;
+
+      // O'quvchilar
+      $('students-table').innerHTML = students.length
+        ? students.map((s) => `
+          <tr class="hover:bg-sky-50">
+            <td class="px-4 py-3 font-medium">${esc(s.full_name)}</td><td class="px-4 py-3">${esc(s.grade)}</td>
+            <td class="px-4 py-3 break-all">${esc(s.email)}</td><td class="px-4 py-3">${s.cert_count}</td>
+            <td class="px-4 py-3"><div class="flex justify-end gap-2">
+              <button type="button" data-reset="${s.id}" class="${btnSoft}"><i data-lucide="key-round" class="h-3.5 w-3.5"></i> Parolni tiklash</button>
+              <button type="button" data-delstudent="${s.id}" data-name="${esc(s.full_name)}" class="${btnDanger}"><i data-lucide="user-x" class="h-3.5 w-3.5"></i> O‘chirish</button>
+            </div></td>
+          </tr>`).join('')
+        : `<tr><td colspan="5" class="px-4 py-8 text-center text-slate-500">O‘quvchilar topilmadi.</td></tr>`;
+
+      // Sertifikatlar jadvali (sahifalash bilan)
+      const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+      page = Math.min(page, pages);
+      const slice = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+      $('certs-table').innerHTML = slice.length
+        ? slice.map((c) => `
+          <tr class="hover:bg-sky-50">
+            <td class="px-4 py-3 font-medium">${esc(folderOf(c))}</td><td class="px-4 py-3">${esc(c.grade)}</td>
+            <td class="px-4 py-3">${esc(c.title)}${missingBadge(c)}</td><td class="px-4 py-3">${badge(c.score)}</td>
+            <td class="px-4 py-3 whitespace-nowrap">${fmtDate(c.issued_date)}</td>
+            <td class="px-4 py-3"><div class="flex justify-end gap-2">
+              <a href="/uploads/${encodeURIComponent(c.stored_name)}" target="_blank" rel="noopener" class="${btnSoft}"><i data-lucide="external-link" class="h-3.5 w-3.5"></i> Ochish</a>
+              <button type="button" data-edit="${c.id}" class="${btnSoft}"><i data-lucide="pencil" class="h-3.5 w-3.5"></i></button>
+              <button type="button" data-del="${c.id}" class="${btnDanger}"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i> O‘chirish</button>
+            </div></td>
+          </tr>`).join('')
+        : `<tr><td colspan="6" class="px-4 py-10 text-center text-slate-500">Sertifikatlar topilmadi.</td></tr>`;
+
+      $('pager').innerHTML = rows.length > PAGE_SIZE
+        ? `<span>${rows.length} tadan ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, rows.length)}</span>
+           <div class="flex gap-2">
+             <button type="button" data-page="${page - 1}" class="btn-soft rounded-lg px-3 py-1.5 font-medium disabled:opacity-40" ${page <= 1 ? 'disabled' : ''}>Oldingi</button>
+             <button type="button" data-page="${page + 1}" class="btn-soft rounded-lg px-3 py-1.5 font-medium disabled:opacity-40" ${page >= pages ? 'disabled' : ''}>Keyingi</button>
+           </div>`
+        : '';
+      icons();
+    }
+
+    $('admin-search').addEventListener('input', () => { page = 1; renderAdmin(); });
+    $('pager').addEventListener('click', (e) => { const b = e.target.closest('[data-page]'); if (b && !b.disabled) { page = +b.dataset.page; renderAdmin(); } });
+    $('folders-grid').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-folder]');
+      if (b) { $('admin-search').value = b.dataset.folder; page = 1; renderAdmin(); }
+    });
+    $('certs-table').addEventListener('click', (e) => {
+      const d = e.target.closest('[data-del]'), ed = e.target.closest('[data-edit]');
+      if (d) deleteCert(d.dataset.del, loadAdmin);
+      if (ed) openEdit(adminData.certificates.find((c) => String(c.id) === ed.dataset.edit));
+    });
+    $('students-table').addEventListener('click', async (e) => {
+      const r = e.target.closest('[data-reset]'), d = e.target.closest('[data-delstudent]');
+      try {
+        if (r) {
+          if (!confirm('Bu o‘quvchi uchun yangi vaqtinchalik parol yaratilsinmi? Eski parol ishlamay qoladi.')) return;
+          const { password } = await api(`/api/admin/students/${r.dataset.reset}/reset-password`, { method: 'POST' });
+          prompt('Vaqtinchalik parol (nusxa oling va o‘quvchiga bering):', password);
+        }
+        if (d && confirm(`"${d.dataset.name}" va uning barcha sertifikatlari butunlay o‘chiriladi. Davom etasizmi?`)) {
+          await api(`/api/admin/students/${d.dataset.delstudent}`, { method: 'DELETE' });
+          toast('O‘quvchi o‘chirildi.'); loadAdmin();
+        }
+      } catch (err) { toast(err.message, false); }
+    });
+    $('zip-btn').addEventListener('click', () => {
+      if (!adminData.certificates.length) return toast('Yuklab olish uchun sertifikatlar yo‘q.', false);
+      window.location.href = '/api/admin/download-zip';
+    });
+
+    /* ---------- Boshlash ---------- */
+    (async function init() {
+      try { me = (await api('/api/me')).user; } catch (e) { me = null; }
+      render();
+    })();
+  </script>
+</body>
+</html>
