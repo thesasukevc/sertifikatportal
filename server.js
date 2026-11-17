@@ -1,19 +1,18 @@
 require('dotenv').config();
 const express = require('express');
-const session = require('express-session');
-const { DatabaseSync } = require('node:sqlite');
+const cookieSession = require('cookie-session');
 const multer = require('multer');
 const archiver = require('archiver');
 const bcrypt = require('bcryptjs');
 const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
+const {
+  sb, db, selectAll, AppError, ALLOWED_EXT, MAX_SIZE, sanitizeName, todayStr, contentTypeOf,
+  ensureBucket, saveCertificate, deleteCertificate, removeFiles, downloadFile
+} = require('./core');
+const { createBot } = require('./bot');
 
 const PORT = process.env.PORT || 3000;
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
-const DB_FILE = path.join(__dirname, 'database.sqlite');
-const ALLOWED_EXT = ['.pdf', '.jpg', '.jpeg', '.png'];
-const MAX_SIZE = 15 * 1024 * 1024; // 15 MB
 
 const ADMIN = {
   full_name: process.env.ADMIN_NAME || 'Xushnudbek Kozimov (Admin)',
@@ -25,149 +24,36 @@ const ADMIN = {
 let SESSION_SECRET = process.env.SESSION_SECRET;
 if (!SESSION_SECRET) {
   SESSION_SECRET = crypto.randomBytes(32).toString('hex');
-  console.warn('OGOHLANTIRISH: .env faylida SESSION_SECRET yo‘q. Vaqtinchalik kalit ishlatilmoqda.');
+  console.warn('OGOHLANTIRISH: SESSION_SECRET o‘rnatilmagan. Vaqtinchalik kalit ishlatilmoqda (qayta ishga tushsa hamma chiqib ketadi).');
 }
 
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+/* ---------- Telegram webhook (JSON parserdan oldin) ---------- */
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const HOOK_SECRET = BOT_TOKEN ? crypto.createHash('sha256').update(BOT_TOKEN).digest('hex').slice(0, 32) : '';
+const HOOK_PATH = `/telegram/${HOOK_SECRET}`;
+let botHandler = null;
 
-/* ---------- Ma'lumotlar bazasi ---------- */
-const db = new DatabaseSync(DB_FILE);
-const run = async (sql, params = []) => {
-  const r = db.prepare(sql).run(...params);
-  return { lastID: Number(r.lastInsertRowid), changes: Number(r.changes) };
-};
-const get = async (sql, params = []) => db.prepare(sql).get(...params);
-const all = async (sql, params = []) => db.prepare(sql).all(...params);
-
-// Sessiyalar uchun oddiy SQLite saqlash joyi (qo'shimcha paket kerak emas)
-class SqliteSessionStore extends session.Store {
-  constructor(database) {
-    super();
-    this.db = database;
-    this.db.exec('CREATE TABLE IF NOT EXISTS sessions (sid TEXT PRIMARY KEY, sess TEXT NOT NULL, expires INTEGER NOT NULL)');
-    setInterval(() => this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now()), 10 * 60 * 1000).unref();
-  }
-  get(sid, cb) {
-    try {
-      const r = this.db.prepare('SELECT sess, expires FROM sessions WHERE sid = ?').get(sid);
-      if (!r || r.expires < Date.now()) return cb(null, null);
-      cb(null, JSON.parse(r.sess));
-    } catch (e) { cb(e); }
-  }
-  set(sid, sess, cb) {
-    try {
-      const exp = sess.cookie && sess.cookie.expires ? new Date(sess.cookie.expires).getTime() : Date.now() + 86400000;
-      this.db.prepare('INSERT OR REPLACE INTO sessions (sid, sess, expires) VALUES (?, ?, ?)').run(sid, JSON.stringify(sess), exp);
-      if (cb) cb(null);
-    } catch (e) { if (cb) cb(e); }
-  }
-  touch(sid, sess, cb) { this.set(sid, sess, cb); }
-  destroy(sid, cb) {
-    try { this.db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid); if (cb) cb(null); }
-    catch (e) { if (cb) cb(e); }
-  }
-}
-
-async function initDb() {
-  await run('PRAGMA foreign_keys = ON');
-  await run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    full_name TEXT NOT NULL,
-    grade TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'student',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-  await run(`CREATE TABLE IF NOT EXISTS certificates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    score TEXT,
-    issued_date TEXT,
-    original_name TEXT NOT NULL,
-    stored_name TEXT NOT NULL,
-    file_hash TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  )`);
-  // Eski bazalar uchun: file_hash ustunini qo'shish
-  const cols = await all('PRAGMA table_info(certificates)');
-  if (!cols.some((c) => c.name === 'file_hash')) await run('ALTER TABLE certificates ADD COLUMN file_hash TEXT');
-
-  const exists = await get('SELECT id FROM users WHERE email = ?', [ADMIN.email]);
-  if (!exists) {
-    const hash = await bcrypt.hash(ADMIN.password, 10);
-    await run('INSERT INTO users (full_name, grade, email, password, role) VALUES (?, ?, ?, ?, ?)', [
-      ADMIN.full_name, ADMIN.grade, ADMIN.email, hash, ADMIN.role
-    ]);
-    console.log('Admin akkaunti yaratildi:', ADMIN.email);
-  }
-}
-
-/* ---------- Yordamchi funksiyalar ---------- */
-function sanitizeName(name, fallback = 'nomsiz') {
-  const cleaned = String(name || '')
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/[. ]+$/, '');
-  return cleaned.slice(0, 120) || fallback;
-}
-function todayStr() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-function removeFileSafe(storedName) {
-  fs.unlink(path.join(UPLOADS_DIR, path.basename(storedName)), () => {});
-}
-// Fayl ichki imzosini tekshirish (kengaytmani almashtirib aldashning oldini oladi)
-function validSignature(filePath, ext) {
-  const buf = Buffer.alloc(8);
-  const fd = fs.openSync(filePath, 'r');
-  try { fs.readSync(fd, buf, 0, 8, 0); } finally { fs.closeSync(fd); }
-  if (ext === '.pdf') return buf.slice(0, 4).toString('latin1') === '%PDF';
-  if (ext === '.png') return buf.slice(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-  return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff; // jpg / jpeg
-}
-function fileHash(filePath) {
-  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
-}
-function rateLimit({ windowMs, max, message }) {
-  const hits = new Map();
-  setInterval(() => {
-    const now = Date.now();
-    hits.forEach((v, k) => v.reset < now && hits.delete(k));
-  }, windowMs).unref();
-  return (req, res, next) => {
-    const now = Date.now();
-    const e = hits.get(req.ip);
-    if (!e || e.reset < now) { hits.set(req.ip, { count: 1, reset: now + windowMs }); return next(); }
-    if (++e.count > max) return res.status(429).json({ error: message });
-    next();
-  };
-}
-function validPassword(p) { return typeof p === 'string' && p.length >= 6; }
-
-/* ---------- Express sozlamalari ---------- */
 const app = express();
 app.disable('x-powered-by');
-if (process.env.COOKIE_SECURE === 'true') app.set('trust proxy', 1);
+app.set('trust proxy', 1); // Render proxy orqasida haqiqiy IP kerak
+if (BOT_TOKEN) {
+  app.post(HOOK_PATH, (req, res, next) => {
+    if (req.get('x-telegram-bot-api-secret-token') !== HOOK_SECRET) return res.sendStatus(403);
+    if (!botHandler) return res.sendStatus(503);
+    botHandler(req, res, next);
+  });
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(
-  session({
-    store: new SqliteSessionStore(db),
-    secret: SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.COOKIE_SECURE === 'true',
-      maxAge: 1000 * 60 * 60 * 8
-    }
+  cookieSession({
+    name: 'sid',
+    keys: [SESSION_SECRET],
+    maxAge: 1000 * 60 * 60 * 8,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.COOKIE_SECURE === 'true'
   })
 );
 
@@ -180,306 +66,312 @@ const assetDirs = [
 ['/assets', '/asstes'].forEach((route) => assetDirs.forEach((dir) => app.use(route, express.static(dir))));
 app.use(express.static(path.join(__dirname, 'public')));
 
+/* ---------- Yordamchilar ---------- */
+function sendErr(res, e) {
+  if (e instanceof AppError) return res.status(e.status).json({ error: e.message });
+  console.error(e);
+  if (res.headersSent) return res.end();
+  res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
+}
+const h = (fn) => async (req, res, next) => {
+  try { await fn(req, res, next); } catch (e) { sendErr(res, e); }
+};
+const numId = (req) => {
+  if (!/^\d+$/.test(req.params.id)) throw new AppError(404, 'Topilmadi.');
+  return Number(req.params.id);
+};
+const validPassword = (p) => typeof p === 'string' && p.length >= 6;
+const fixOriginalName = (name) => { try { return Buffer.from(name, 'latin1').toString('utf8'); } catch (e) { return name; } };
+
+function rateLimit({ windowMs, max, message, key }) {
+  const hits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    hits.forEach((v, k) => v.reset < now && hits.delete(k));
+  }, windowMs).unref();
+  return (req, res, next) => {
+    const now = Date.now();
+    const k = key ? key(req) : req.ip;
+    const e = hits.get(k);
+    if (!e || e.reset < now) { hits.set(k, { count: 1, reset: now + windowMs }); return next(); }
+    if (++e.count > max) return res.status(429).json({ error: message });
+    next();
+  };
+}
+// Maktabda hamma bir Wi-Fi (bir IP) dan kirishi mumkin, shuning uchun limitlar keng.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Bu email uchun urinishlar juda ko‘p. 15 daqiqadan keyin qayta urining.',
+  key: (req) => `${req.ip}|${String((req.body && req.body.email) || '').trim().toLowerCase()}`
+});
+const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 300, message: 'Ro‘yxatdan o‘tish urinishlari juda ko‘p. Keyinroq urinib ko‘ring.' });
+
 const requireAuth = (req, res, next) =>
-  req.session.user ? next() : res.status(401).json({ error: 'Avval tizimga kiring.' });
+  req.session && req.session.user ? next() : res.status(401).json({ error: 'Avval tizimga kiring.' });
 const requireAdmin = (req, res, next) => {
-  if (!req.session.user) return res.status(401).json({ error: 'Avval tizimga kiring.' });
+  if (!req.session || !req.session.user) return res.status(401).json({ error: 'Avval tizimga kiring.' });
   if (req.session.user.role !== 'admin') return res.status(403).json({ error: 'Bu amal faqat admin uchun.' });
   next();
 };
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: 'Urinishlar juda ko‘p. 15 daqiqadan keyin qayta urining.' });
-const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10, message: 'Ro‘yxatdan o‘tish urinishlari juda ko‘p. Keyinroq urinib ko‘ring.' });
 
-/* ---------- Fayl yuklash (multer) ---------- */
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-    filename: (req, file, cb) =>
-      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${path.extname(file.originalname).toLowerCase()}`)
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_SIZE },
   fileFilter: (req, file, cb) => {
-    if (!ALLOWED_EXT.includes(path.extname(file.originalname).toLowerCase())) {
-      return cb(new Error('Faqat PDF, JPG, JPEG yoki PNG fayllarni yuklash mumkin.'));
-    }
+    const ext = path.extname(fixOriginalName(file.originalname)).toLowerCase();
+    if (!ALLOWED_EXT.includes(ext)) return cb(new Error('Faqat PDF, JPG, JPEG yoki PNG fayllarni yuklash mumkin.'));
     cb(null, true);
   }
 });
-const fixOriginalName = (name) => { try { return Buffer.from(name, 'latin1').toString('utf8'); } catch (e) { return name; } };
+const receiveFile = (req, res) =>
+  new Promise((resolve, reject) => upload.single('file')(req, res, (e) => (e ? reject(e) : resolve())));
+
+const sessionUser = (u) => ({ id: u.id, full_name: u.full_name, grade: u.grade, email: u.email, role: u.role });
 
 /* ---------- Autentifikatsiya ---------- */
-app.post('/api/register', registerLimiter, async (req, res) => {
-  try {
-    const full_name = String(req.body.full_name || '').trim();
-    const grade = String(req.body.grade || '').trim();
-    const email = String(req.body.email || '').trim().toLowerCase();
-    const password = String(req.body.password || '');
-    if (!full_name || !grade || !email || !password) return res.status(400).json({ error: 'Barcha maydonlarni to‘ldiring.' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Email manzili noto‘g‘ri.' });
-    if (!validPassword(password)) return res.status(400).json({ error: 'Parol kamida 6 ta belgidan iborat bo‘lishi kerak.' });
-    if (await get('SELECT id FROM users WHERE email = ?', [email])) {
-      return res.status(409).json({ error: 'Bu email bilan allaqachon ro‘yxatdan o‘tilgan.' });
-    }
-    const hash = await bcrypt.hash(password, 10);
-    const result = await run('INSERT INTO users (full_name, grade, email, password, role) VALUES (?, ?, ?, ?, ?)', [
-      full_name, grade, email, hash, 'student'
-    ]);
-    req.session.user = { id: result.lastID, full_name, grade, email, role: 'student' };
-    res.json({ user: req.session.user });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
+app.post('/api/register', registerLimiter, h(async (req, res) => {
+  const full_name = String(req.body.full_name || '').trim();
+  const grade = String(req.body.grade || '').trim();
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
+  if (!full_name || !grade || !email || !password) throw new AppError(400, 'Barcha maydonlarni to‘ldiring.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError(400, 'Email manzili noto‘g‘ri.');
+  if (!validPassword(password)) throw new AppError(400, 'Parol kamida 6 ta belgidan iborat bo‘lishi kerak.');
+  if (db(await sb.from('users').select('id').eq('email', email).maybeSingle())) {
+    throw new AppError(409, 'Bu email bilan allaqachon ro‘yxatdan o‘tilgan.');
   }
-});
+  const user = db(
+    await sb.from('users').insert({ full_name, grade, email, password: await bcrypt.hash(password, 10), role: 'student' })
+      .select('id,full_name,grade,email,role').single()
+  );
+  req.session.user = sessionUser(user);
+  res.json({ user: req.session.user });
+}));
 
-app.post('/api/login', loginLimiter, async (req, res) => {
-  try {
-    const email = String(req.body.email || '').trim().toLowerCase();
-    const password = String(req.body.password || '');
-    if (!email || !password) return res.status(400).json({ error: 'Email va parolni kiriting.' });
-    const user = await get('SELECT * FROM users WHERE email = ?', [email]);
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ error: 'Email yoki parol noto‘g‘ri.' });
-    }
-    req.session.user = { id: user.id, full_name: user.full_name, grade: user.grade, email: user.email, role: user.role };
-    res.json({ user: req.session.user });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
+app.post('/api/login', loginLimiter, h(async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const password = String(req.body.password || '');
+  if (!email || !password) throw new AppError(400, 'Email va parolni kiriting.');
+  const user = db(await sb.from('users').select('*').eq('email', email).maybeSingle());
+  if (!user || !user.password || !(await bcrypt.compare(password, user.password))) {
+    throw new AppError(401, 'Email yoki parol noto‘g‘ri.');
   }
-});
+  req.session.user = sessionUser(user);
+  res.json({ user: req.session.user });
+}));
 
-app.post('/api/logout', (req, res) => req.session.destroy(() => res.json({ ok: true })));
-app.get('/api/me', (req, res) => res.json({ user: req.session.user || null }));
+app.post('/api/logout', (req, res) => { req.session = null; res.json({ ok: true }); });
+app.get('/api/me', (req, res) => res.json({ user: (req.session && req.session.user) || null }));
 
-app.post('/api/change-password', requireAuth, async (req, res) => {
-  try {
-    const { current_password, new_password } = req.body;
-    if (!validPassword(new_password)) return res.status(400).json({ error: 'Yangi parol kamida 6 ta belgidan iborat bo‘lishi kerak.' });
-    const user = await get('SELECT * FROM users WHERE id = ?', [req.session.user.id]);
-    if (!user || !(await bcrypt.compare(String(current_password || ''), user.password))) {
-      return res.status(400).json({ error: 'Joriy parol noto‘g‘ri.' });
-    }
-    await run('UPDATE users SET password = ? WHERE id = ?', [await bcrypt.hash(new_password, 10), user.id]);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
+app.post('/api/change-password', requireAuth, h(async (req, res) => {
+  const { current_password, new_password } = req.body;
+  if (!validPassword(new_password)) throw new AppError(400, 'Yangi parol kamida 6 ta belgidan iborat bo‘lishi kerak.');
+  const user = db(await sb.from('users').select('id,password').eq('id', req.session.user.id).maybeSingle());
+  if (!user || !user.password || !(await bcrypt.compare(String(current_password || ''), user.password))) {
+    throw new AppError(400, 'Joriy parol noto‘g‘ri.');
   }
-});
+  db(await sb.from('users').update({ password: await bcrypt.hash(new_password, 10) }).eq('id', user.id));
+  res.json({ ok: true });
+}));
 
 /* ---------- Sertifikatlar ---------- */
-app.post('/api/certificates', requireAuth, (req, res) => {
-  upload.single('file')(req, res, async (err) => {
-    if (err) {
-      return res.status(400).json({
-        error: err.code === 'LIMIT_FILE_SIZE' ? 'Fayl hajmi 15 MB dan oshmasligi kerak.' : err.message || 'Fayl yuklashda xatolik.'
-      });
-    }
-    const file = req.file;
-    const fail = (code, msg) => { if (file) removeFileSafe(file.filename); return res.status(code).json({ error: msg }); };
-    try {
-      const title = String(req.body.title || '').trim();
-      const score = String(req.body.score || '').trim();
-      const issued_date = String(req.body.issued_date || '').trim() || todayStr();
-      if (!file) return fail(400, 'Sertifikat faylini tanlang.');
-      if (!title) return fail(400, 'Sertifikat nomini kiriting.');
-      if (!validSignature(file.path, path.extname(file.filename))) {
-        return fail(400, 'Fayl mazmuni uning turiga mos kelmaydi. Haqiqiy PDF, JPG yoki PNG yuklang.');
-      }
-      const hash = fileHash(file.path);
-      if (await get('SELECT id FROM certificates WHERE user_id = ? AND file_hash = ?', [req.session.user.id, hash])) {
-        return fail(409, 'Bu fayl avval yuklangan.');
-      }
-      await run(
-        'INSERT INTO certificates (user_id, title, score, issued_date, original_name, stored_name, file_hash) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [req.session.user.id, title, score, issued_date, fixOriginalName(file.originalname), file.filename, hash]
-      );
-      res.json({ ok: true });
-    } catch (e) {
-      console.error(e);
-      fail(500, 'Serverda xatolik yuz berdi.');
-    }
+app.post('/api/certificates', requireAuth, h(async (req, res) => {
+  try { await receiveFile(req, res); }
+  catch (e) { throw new AppError(400, e.code === 'LIMIT_FILE_SIZE' ? 'Fayl hajmi 15 MB dan oshmasligi kerak.' : e.message || 'Fayl yuklashda xatolik.'); }
+  const title = String(req.body.title || '').trim();
+  if (!req.file) throw new AppError(400, 'Sertifikat faylini tanlang.');
+  if (!title) throw new AppError(400, 'Sertifikat nomini kiriting.');
+  await saveCertificate({
+    user_id: req.session.user.id,
+    title,
+    score: String(req.body.score || '').trim(),
+    issued_date: String(req.body.issued_date || '').trim() || todayStr(),
+    originalName: fixOriginalName(req.file.originalname),
+    buffer: req.file.buffer,
+    source: 'web'
   });
-});
+  res.json({ ok: true });
+}));
 
-app.get('/api/my-certificates', requireAuth, async (req, res) => {
-  try {
-    res.json({
-      certificates: await all('SELECT * FROM certificates WHERE user_id = ? ORDER BY created_at DESC, id DESC', [req.session.user.id])
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
-  }
-});
+app.get('/api/my-certificates', requireAuth, h(async (req, res) => {
+  const rows = db(
+    await sb.from('certificates').select('id,title,score,issued_date,original_name').eq('user_id', req.session.user.id)
+      .order('id', { ascending: false })
+  );
+  res.json({ certificates: rows });
+}));
 
-async function ownCert(req, res) {
-  const cert = await get('SELECT * FROM certificates WHERE id = ?', [req.params.id]);
-  if (!cert) { res.status(404).json({ error: 'Sertifikat topilmadi.' }); return null; }
+async function ownCert(req) {
+  const cert = db(await sb.from('certificates').select('*').eq('id', numId(req)).maybeSingle());
+  if (!cert) throw new AppError(404, 'Sertifikat topilmadi.');
   if (req.session.user.role !== 'admin' && cert.user_id !== req.session.user.id) {
-    res.status(403).json({ error: 'Bu sertifikatga ruxsatingiz yo‘q.' });
-    return null;
+    throw new AppError(403, 'Bu sertifikatga ruxsatingiz yo‘q.');
   }
   return cert;
 }
 
-app.put('/api/certificates/:id', requireAuth, async (req, res) => {
-  try {
-    const cert = await ownCert(req, res);
-    if (!cert) return;
-    const title = String(req.body.title || '').trim();
-    if (!title) return res.status(400).json({ error: 'Sertifikat nomini kiriting.' });
-    await run('UPDATE certificates SET title = ?, score = ?, issued_date = ? WHERE id = ?', [
-      title, String(req.body.score || '').trim(), String(req.body.issued_date || '').trim() || cert.issued_date, cert.id
-    ]);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
-  }
-});
+app.put('/api/certificates/:id', requireAuth, h(async (req, res) => {
+  const cert = await ownCert(req);
+  const title = String(req.body.title || '').trim();
+  if (!title) throw new AppError(400, 'Sertifikat nomini kiriting.');
+  db(await sb.from('certificates').update({
+    title,
+    score: String(req.body.score || '').trim(),
+    issued_date: String(req.body.issued_date || '').trim() || cert.issued_date
+  }).eq('id', cert.id));
+  res.json({ ok: true });
+}));
 
-app.delete('/api/certificates/:id', requireAuth, async (req, res) => {
-  try {
-    const cert = await ownCert(req, res);
-    if (!cert) return;
-    await run('DELETE FROM certificates WHERE id = ?', [cert.id]);
-    removeFileSafe(cert.stored_name);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
-  }
-});
+app.delete('/api/certificates/:id', requireAuth, h(async (req, res) => {
+  await deleteCertificate(await ownCert(req));
+  res.json({ ok: true });
+}));
 
-// Yuklangan fayllar: faqat egasi yoki admin ko'ra oladi
-app.get('/uploads/:name', requireAuth, async (req, res) => {
-  try {
-    const name = path.basename(req.params.name);
-    const cert = await get('SELECT user_id FROM certificates WHERE stored_name = ?', [name]);
-    if (!cert) return res.status(404).send('Fayl topilmadi.');
-    if (req.session.user.role !== 'admin' && cert.user_id !== req.session.user.id) return res.status(403).send('Ruxsat yo‘q.');
-    const file = path.join(UPLOADS_DIR, name);
-    if (!fs.existsSync(file)) return res.status(404).send('Fayl serverda topilmadi.');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.sendFile(file);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Serverda xatolik yuz berdi.');
-  }
-});
+// Fayllar: faqat egasi yoki admin ko'ra oladi
+app.get('/files/:id', requireAuth, h(async (req, res) => {
+  const cert = await ownCert(req);
+  const buf = await downloadFile(cert.storage_path);
+  if (!buf) throw new AppError(404, 'Fayl topilmadi.');
+  const ext = path.extname(cert.storage_path).toLowerCase();
+  res.setHeader('Content-Type', contentTypeOf(ext));
+  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(cert.original_name)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.send(buf);
+}));
 
 /* ---------- Admin ---------- */
-app.get('/api/admin/overview', requireAdmin, async (req, res) => {
-  try {
-    const students = await all(
-      `SELECT u.id, u.full_name, u.grade, u.email, COUNT(c.id) AS cert_count
-       FROM users u LEFT JOIN certificates c ON c.user_id = u.id
-       WHERE u.role = 'student' GROUP BY u.id ORDER BY u.full_name COLLATE NOCASE`
-    );
-    const certificates = await all(
-      `SELECT c.id, c.user_id, c.title, c.score, c.issued_date, c.original_name, c.stored_name, u.full_name, u.grade
-       FROM certificates c JOIN users u ON u.id = c.user_id
-       WHERE u.role = 'student' ORDER BY u.full_name COLLATE NOCASE, c.created_at DESC`
-    );
-    certificates.forEach((c) => { c.missing = !fs.existsSync(path.join(UPLOADS_DIR, path.basename(c.stored_name))); });
-    res.json({ total_students: students.length, students, certificates });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
-  }
-});
+app.get('/api/admin/overview', requireAdmin, h(async (req, res) => {
+  const users = await selectAll('users', 'id,full_name,grade,email', (q) => q.eq('role', 'student'));
+  const certs = await selectAll('certificates', 'id,user_id,title,score,issued_date,original_name,created_at');
+  const umap = new Map(users.map((u) => [u.id, u]));
+  const counts = new Map();
+  const certificates = [];
+  certs.forEach((c) => {
+    const u = umap.get(c.user_id);
+    if (!u) return;
+    counts.set(u.id, (counts.get(u.id) || 0) + 1);
+    certificates.push({ ...c, full_name: u.full_name, grade: u.grade });
+  });
+  certificates.sort((a, b) => a.full_name.localeCompare(b.full_name) || b.id - a.id);
+  const students = users
+    .map((u) => ({ ...u, cert_count: counts.get(u.id) || 0 }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name));
+  res.json({ total_students: students.length, students, certificates });
+}));
 
-async function studentById(req, res) {
-  const u = await get("SELECT * FROM users WHERE id = ? AND role = 'student'", [req.params.id]);
-  if (!u) res.status(404).json({ error: 'O‘quvchi topilmadi.' });
+async function studentById(req) {
+  const u = db(await sb.from('users').select('*').eq('id', numId(req)).eq('role', 'student').maybeSingle());
+  if (!u) throw new AppError(404, 'O‘quvchi topilmadi.');
   return u;
 }
 
-app.delete('/api/admin/students/:id', requireAdmin, async (req, res) => {
-  try {
-    const u = await studentById(req, res);
-    if (!u) return;
-    const certs = await all('SELECT stored_name FROM certificates WHERE user_id = ?', [u.id]);
-    await run('DELETE FROM certificates WHERE user_id = ?', [u.id]);
-    await run('DELETE FROM users WHERE id = ?', [u.id]);
-    certs.forEach((c) => removeFileSafe(c.stored_name));
-    res.json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
-  }
-});
+app.delete('/api/admin/students/:id', requireAdmin, h(async (req, res) => {
+  const u = await studentById(req);
+  const certs = db(await sb.from('certificates').select('storage_path').eq('user_id', u.id));
+  db(await sb.from('users').delete().eq('id', u.id)); // sertifikat qatorlari ham o'chadi (cascade)
+  await removeFiles(certs.map((c) => c.storage_path));
+  res.json({ ok: true });
+}));
 
-app.post('/api/admin/students/:id/reset-password', requireAdmin, async (req, res) => {
-  try {
-    const u = await studentById(req, res);
-    if (!u) return;
-    const temp = crypto.randomBytes(5).toString('hex'); // 10 belgi
-    await run('UPDATE users SET password = ? WHERE id = ?', [await bcrypt.hash(temp, 10), u.id]);
-    res.json({ password: temp });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Serverda xatolik yuz berdi.' });
-  }
-});
+app.post('/api/admin/students/:id/reset-password', requireAdmin, h(async (req, res) => {
+  const u = await studentById(req);
+  const temp = crypto.randomBytes(5).toString('hex');
+  db(await sb.from('users').update({ password: await bcrypt.hash(temp, 10) }).eq('id', u.id));
+  res.json({ password: temp });
+}));
 
-app.get('/api/admin/download-zip', requireAdmin, async (req, res) => {
-  try {
-    const rows = await all(
-      `SELECT c.*, u.full_name, u.grade FROM certificates c JOIN users u ON u.id = c.user_id
-       ORDER BY u.full_name COLLATE NOCASE, u.id, c.created_at, c.id`
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Yuklab olish uchun sertifikatlar yo‘q.' });
+app.get('/api/admin/download-zip', requireAdmin, h(async (req, res) => {
+  const users = await selectAll('users', 'id,full_name,grade');
+  const rows = await selectAll('certificates', 'id,user_id,title,score,storage_path');
+  if (!rows.length) throw new AppError(404, 'Yuklab olish uchun sertifikatlar yo‘q.');
+  const umap = new Map(users.map((u) => [u.id, u]));
+  rows.forEach((r) => {
+    const u = umap.get(r.user_id) || { full_name: 'Nomalum', grade: '' };
+    r.full_name = u.full_name;
+    r.grade = u.grade;
+  });
+  rows.sort((a, b) => a.full_name.localeCompare(b.full_name) || a.user_id - b.user_id || a.id - b.id);
 
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="Oquvchilar_Sertifikatlari_${todayStr()}.zip"`);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="Oquvchilar_Sertifikatlari_${todayStr()}.zip"`);
 
-    const archive = archiver('zip', { zlib: { level: 6 } });
-    archive.on('warning', (w) => console.warn('ZIP ogohlantirish:', w.message));
-    archive.on('error', (e) => { console.error('ZIP xatolik:', e); res.destroy(e); });
-    res.on('close', () => { if (!res.writableFinished) archive.abort(); });
-    archive.pipe(res);
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.on('warning', (w) => console.warn('ZIP ogohlantirish:', w.message));
+  archive.on('error', (e) => { console.error('ZIP xatolik:', e); res.destroy(e); });
+  res.on('close', () => { if (!res.writableFinished) archive.abort(); });
+  archive.pipe(res);
 
-    const folderByUser = new Map();
-    const usedFolders = new Set();
-    const usedPaths = new Set();
-    const missing = [];
+  const folderByUser = new Map();
+  const usedFolders = new Set();
+  const usedPaths = new Set();
+  const missing = [];
 
-    for (const row of rows) {
-      let folder = folderByUser.get(row.user_id);
-      if (!folder) {
-        const base = sanitizeName(`${row.full_name} (${row.grade})`);
-        folder = base;
-        let n = 2;
-        while (usedFolders.has(folder.toLowerCase())) folder = `${base} ${n++}`;
-        usedFolders.add(folder.toLowerCase());
-        folderByUser.set(row.user_id, folder);
-      }
-      const filePath = path.join(UPLOADS_DIR, path.basename(row.stored_name));
-      if (!fs.existsSync(filePath)) { missing.push(`${folder} / ${row.title}`); continue; }
-
-      const ext = path.extname(row.stored_name).toLowerCase();
-      const base = sanitizeName(row.score ? `${row.title} - ${row.score}` : row.title, 'Sertifikat');
-      let fileName = `${base}${ext}`;
-      let counter = 1;
-      while (usedPaths.has(`${folder}/${fileName}`.toLowerCase())) fileName = `${base}_${counter++}${ext}`;
-      usedPaths.add(`${folder}/${fileName}`.toLowerCase());
-      archive.file(filePath, { name: `${folder}/${fileName}` });
+  for (const row of rows) {
+    let folder = folderByUser.get(row.user_id);
+    if (!folder) {
+      const base = sanitizeName(`${row.full_name} (${row.grade})`);
+      folder = base;
+      let n = 2;
+      while (usedFolders.has(folder.toLowerCase())) folder = `${base} ${n++}`;
+      usedFolders.add(folder.toLowerCase());
+      folderByUser.set(row.user_id, folder);
     }
-    if (missing.length) {
-      archive.append('Quyidagi sertifikat fayllari serverda topilmadi:\r\n\r\n' + missing.join('\r\n'), { name: 'TOPILMAGAN_FAYLLAR.txt' });
-    }
-    await archive.finalize();
-  } catch (err) {
-    console.error(err);
-    if (!res.headersSent) res.status(500).json({ error: 'ZIP yaratishda xatolik yuz berdi.' });
+    const buf = await downloadFile(row.storage_path);
+    if (!buf) { missing.push(`${folder} / ${row.title}`); continue; }
+
+    const ext = path.extname(row.storage_path).toLowerCase();
+    const base = sanitizeName(row.score ? `${row.title} - ${row.score}` : row.title, 'Sertifikat');
+    let fileName = `${base}${ext}`;
+    let counter = 1;
+    while (usedPaths.has(`${folder}/${fileName}`.toLowerCase())) fileName = `${base}_${counter++}${ext}`;
+    usedPaths.add(`${folder}/${fileName}`.toLowerCase());
+    archive.append(buf, { name: `${folder}/${fileName}` });
   }
-});
+  if (missing.length) {
+    archive.append('Quyidagi sertifikat fayllarini yuklab bo‘lmadi:\r\n\r\n' + missing.join('\r\n'), { name: 'TOPILMAGAN_FAYLLAR.txt' });
+  }
+  await archive.finalize();
+}));
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Manzil topilmadi.' }));
 
-initDb()
-  .then(() => app.listen(PORT, () => console.log(`Sertifikatlar Portali ishga tushdi: http://localhost:${PORT}`)))
-  .catch((err) => { console.error('Ma‘lumotlar bazasini tayyorlashda xatolik:', err); process.exit(1); });
+/* ---------- Ishga tushirish ---------- */
+async function initAdmin() {
+  const exists = db(await sb.from('users').select('id').eq('email', ADMIN.email).maybeSingle());
+  if (!exists) {
+    db(await sb.from('users').insert({
+      full_name: ADMIN.full_name, grade: ADMIN.grade, email: ADMIN.email,
+      password: await bcrypt.hash(ADMIN.password, 10), role: 'admin'
+    }));
+    console.log('Admin akkaunti yaratildi:', ADMIN.email);
+  }
+}
+
+async function startBot() {
+  const bot = createBot();
+  if (!bot) return console.log('BOT_TOKEN yo‘q: Telegram bot ishga tushirilmadi.');
+  const base = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
+  if (base) {
+    await bot.telegram.setWebhook(base.replace(/\/$/, '') + HOOK_PATH, { secret_token: HOOK_SECRET });
+    botHandler = bot.webhookCallback(HOOK_PATH);
+    console.log('Telegram bot webhook rejimida ishlamoqda.');
+  } else {
+    await bot.telegram.deleteWebhook();
+    bot.launch().catch((e) => console.error('Bot xatosi:', e));
+    console.log('Telegram bot polling rejimida ishlamoqda (lokal).');
+  }
+}
+
+(async () => {
+  try {
+    await ensureBucket();
+    await initAdmin();
+  } catch (e) {
+    console.error('Supabase bilan ishlashda xatolik. supabase.sql ni SQL Editor’da ishga tushirdingizmi va kalitlar to‘g‘rimi?\n', e);
+    process.exit(1);
+  }
+  app.listen(PORT, () => console.log(`Sertifikatlar Portali ishga tushdi: http://localhost:${PORT}`));
+  startBot().catch((e) => console.error('Botni ishga tushirishda xatolik:', e));
+})();

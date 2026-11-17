@@ -420,7 +420,7 @@
                 <p class="mt-1 text-xs text-slate-500">${fmtDate(c.issued_date)} · <span class="break-all">${esc(c.original_name)}</span></p>
               </div>
               <div class="flex shrink-0 flex-wrap gap-2">
-                <a href="/uploads/${encodeURIComponent(c.stored_name)}" target="_blank" rel="noopener" class="${btnSoft}"><i data-lucide="external-link" class="h-3.5 w-3.5"></i> Ochish</a>
+                <a href="/files/${c.id}" target="_blank" rel="noopener" class="${btnSoft}"><i data-lucide="external-link" class="h-3.5 w-3.5"></i> Ochish</a>
                 <button type="button" data-edit="${c.id}" class="${btnSoft}"><i data-lucide="pencil" class="h-3.5 w-3.5"></i> Tahrirlash</button>
                 <button type="button" data-del="${c.id}" class="${btnDanger}"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i> O‘chirish</button>
               </div>
@@ -500,7 +500,7 @@
             <td class="px-4 py-3">${esc(c.title)}${missingBadge(c)}</td><td class="px-4 py-3">${badge(c.score)}</td>
             <td class="px-4 py-3 whitespace-nowrap">${fmtDate(c.issued_date)}</td>
             <td class="px-4 py-3"><div class="flex justify-end gap-2">
-              <a href="/uploads/${encodeURIComponent(c.stored_name)}" target="_blank" rel="noopener" class="${btnSoft}"><i data-lucide="external-link" class="h-3.5 w-3.5"></i> Ochish</a>
+              <a href="/files/${c.id}" target="_blank" rel="noopener" class="${btnSoft}"><i data-lucide="external-link" class="h-3.5 w-3.5"></i> Ochish</a>
               <button type="button" data-edit="${c.id}" class="${btnSoft}"><i data-lucide="pencil" class="h-3.5 w-3.5"></i></button>
               <button type="button" data-del="${c.id}" class="${btnDanger}"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i> O‘chirish</button>
             </div></td>
